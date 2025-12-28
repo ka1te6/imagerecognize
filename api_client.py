@@ -7,7 +7,6 @@ from typing import Dict, Optional
 from dotenv import load_dotenv  # type: ignore[reportMissingImports]
 
 try:
-    # Локальная модель BLIP для генерации подписи к изображению
     from PIL import Image  # type: ignore[reportMissingImports]
     from transformers import (  # type: ignore[reportMissingImports]
         BlipProcessor,
@@ -15,8 +14,6 @@ try:
     )
     _BLIP_AVAILABLE = True
 except Exception:
-    # Позволяет приложению работать даже без этих зависимостей,
-    # просто локальный провайдер будет недоступен
     _BLIP_AVAILABLE = False
 
 load_dotenv()
@@ -24,7 +21,6 @@ load_dotenv()
 
 class ImageRecognitionAPI:
     def __init__(self):
-        # Кэш для локальной модели BLIP
         self._blip_processor = None
         self._blip_model = None
     
@@ -61,15 +57,61 @@ class ImageRecognitionAPI:
 
         try:
             inputs = self._blip_processor(images=image, return_tensors="pt")
-            output = self._blip_model.generate(**inputs)
+            output = self._blip_model.generate(**inputs, max_length=50, num_beams=3)
             caption_en = self._blip_processor.decode(output[0], skip_special_tokens=True).strip()
             if not caption_en:
                 return {"error": "Модель не смогла сгенерировать подпись к изображению"}
-            # Перевод на русский через веб‑API; при ошибке вернем английский текст
+            
+            caption_en = self._clean_caption(caption_en)
             caption_ru = self._translate_to_ru(caption_en)
             return {"caption": caption_ru or caption_en}
         except Exception as e:
             return {"error": f"Ошибка работы локальной модели BLIP: {str(e)}"}
+    
+    def _clean_caption(self, text: str) -> str:
+        """Очистка подписи от повторяющихся слов"""
+        if not text:
+            return ""
+        
+        words = text.split()
+        if len(words) <= 2:
+            return text
+        
+        word_count = {}
+        for word in words:
+            word_count[word] = word_count.get(word, 0) + 1
+        
+        cleaned = []
+        seen_repeated = set()
+        
+        for word in words:
+            count = word_count.get(word, 0)
+            if count > 3:
+                if word not in seen_repeated:
+                    cleaned.append(word)
+                    seen_repeated.add(word)
+            elif count >= 2:
+                if not cleaned or cleaned[-1] != word:
+                    cleaned.append(word)
+            else:
+                cleaned.append(word)
+        
+        result = " ".join(cleaned)
+        
+        unique_words = set(result.split())
+        if len(unique_words) == 1 and len(words) > 3:
+            original_unique = []
+            seen = set()
+            for word in words:
+                if word not in seen:
+                    original_unique.append(word)
+                    seen.add(word)
+                    if len(original_unique) >= 3:
+                        break
+            if len(original_unique) > 1:
+                return " ".join(original_unique)
+        
+        return result
     
     def _translate_to_ru(self, text: str) -> str:
         if not text:
